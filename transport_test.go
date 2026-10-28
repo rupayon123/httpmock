@@ -386,6 +386,87 @@ func TestMockTransportNoResponder(t *testing.T) {
 	td.CmpHasSuffix(t, err, `Responder not found for POST http://www.example.com///foo//bar, but one matches URL "`+url+`"`)
 }
 
+func TestMockTransportSortedQueryPreservesURL(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		request    string
+		registered string
+	}{
+		{
+			name:       "query repeated in path",
+			request:    "http://example.com/b=2&a=1?b=2&a=1",
+			registered: "http://example.com/b=2&a=1?a=1&b=2",
+		},
+		{
+			name:       "query inside longer path",
+			request:    "http://example.com/prefix/b=2&a=1/suffix?b=2&a=1",
+			registered: "http://example.com/prefix/b=2&a=1/suffix?a=1&b=2",
+		},
+		{
+			name:       "repeated values",
+			request:    "http://example.com/q=b&q=a?q=b&q=a",
+			registered: "http://example.com/q=b&q=a?q=a&q=b",
+		},
+		{
+			name:       "fragment preserved",
+			request:    "http://example.com/b=2&a=1?b=2&a=1#fragment",
+			registered: "http://example.com/b=2&a=1?a=1&b=2#fragment",
+		},
+		{
+			name:       "escaped path preserved",
+			request:    "http://example.com/a%2fb/b=2&a=1?b=2&a=1",
+			registered: "http://example.com/a%2fb/b=2&a=1?a=1&b=2",
+		},
+		{
+			name:       "ordinary sorted query",
+			request:    "http://example.com/path?b=2&a=1",
+			registered: "http://example.com/path?a=1&b=2",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, useRegexp := range []bool{false, true} {
+				t.Run(fmt.Sprintf("regexp=%t", useRegexp), func(t *testing.T) {
+					transport := httpmock.NewMockTransport()
+					responder := httpmock.NewStringResponder(http.StatusOK, "matched")
+					if useRegexp {
+						transport.RegisterRegexpResponder("GET", regexp.MustCompile("^"+regexp.QuoteMeta(test.registered)+"$"), responder)
+					} else {
+						transport.RegisterResponder("GET", test.registered, responder)
+					}
+					client := &http.Client{Transport: transport}
+					req, err := http.NewRequest("GET", test.request, nil)
+					if !td.CmpNoError(t, err) {
+						return
+					}
+					resp, err := client.Do(req)
+					if td.CmpNoError(t, err) {
+						assertBody(t, resp, "matched")
+					}
+					td.Cmp(t, req.URL.String(), test.request, "original request remains unchanged")
+				})
+			}
+		})
+	}
+}
+
+func TestMockTransportSortedQueryMatchPrecedence(t *testing.T) {
+	const requestURL = "http://example.com/b=2&a=1?b=2&a=1"
+
+	transport := httpmock.NewMockTransport()
+	transport.RegisterResponder("GET", "http://example.com/a=1&b=2?b=2&a=1", httpmock.NewStringResponder(200, "wrong path"))
+	client := &http.Client{Transport: transport}
+	_, err := client.Get(requestURL)
+	td.Cmp(t, err, td.Isa((*url.Error)(nil)))
+	td.Cmp(t, errors.Is(err, httpmock.NoResponderFound), true)
+
+	transport.RegisterResponder("GET", "http://example.com/b=2&a=1?a=1&b=2", httpmock.NewStringResponder(200, "sorted"))
+	transport.RegisterResponder("GET", requestURL, httpmock.NewStringResponder(200, "exact"))
+	resp, err := client.Get(requestURL)
+	if td.CmpNoError(t, err) {
+		assertBody(t, resp, "exact")
+	}
+}
+
 func TestMockTransportQuerystringFallback(t *testing.T) {
 	assert := td.Assert(t)
 

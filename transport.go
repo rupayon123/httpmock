@@ -117,7 +117,9 @@ func (m *MockTransport) findResponders(method string, url *url.URL, fromIdx int)
 		if query != "" {
 			// Replace unsorted query params by sorted ones:
 			//   http://z.tld/path?sorted_q...
-			key.URL = strings.Replace(urlStr, url.RawQuery, query, 1)
+			sortedURL := *url
+			sortedURL.RawQuery = query
+			key.URL = sortedURL.String()
 			found = getResponders(m, key)
 			if found.responders != nil {
 				break
